@@ -2,8 +2,13 @@ manifestVersion: 1
 id: soumo-openalgo
 name: OpenAlgo
 tagline: Algorithmic trading platform for Indian brokers
-category: finance
-version: "2.0.2.0"
+# Community app stores load the icon from a URL. A local icon.svg file in
+# this directory is never read by umbrelOS.
+icon: https://raw.githubusercontent.com/Soumojit28/umbrel-app-store/main/soumo-openalgo/icon.svg
+category: Finance
+# Semver-shaped for umbrelOS. Upstream calls this release 2.0.2.0; the
+# image is pinned by commit in docker-compose.yml.
+version: "2.0.2"
 port: 5000
 description: >-
   OpenAlgo is a self-hosted algorithmic trading platform that puts a single
@@ -44,11 +49,17 @@ repo: https://github.com/marketcalls/openalgo
 support: https://github.com/marketcalls/openalgo/issues
 gallery: []
 releaseNotes: >-
-  First release in this store, tracking OpenAlgo 2.0.2.0.
+  Tracks OpenAlgo 2.0.2.0, pinned to image marketcalls/openalgo:2d8edfd.
 
 
-  Requires a one-time .env bootstrap over SSH after install. See the README in
-  this app directory for the exact commands.
+  Installs and starts with no SSH required. A one-shot init service seeds the
+  configuration file, generates fresh secrets, and sets the ownership the app
+  needs before the main service starts.
+
+
+  If you reach your Umbrel by IP rather than umbrel.local, set OA_HOSTNAME in
+  docker-compose.yml before the first start, or run bootstrap-env.sh --force
+  afterwards to rewrite the URLs.
 dependencies: []
 path: ""
 defaultUsername: ""

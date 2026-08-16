@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 #
-# OpenAlgo on umbrelOS - one-time .env bootstrap.
+# OpenAlgo on umbrelOS - .env repair and reconfigure tool.
 #
-# Run this ON THE UMBREL BOX (ssh umbrel@umbrel.local), once, after the app
-# has been installed from the app store.
+# NOT required for a normal install. The `init` service in docker-compose.yml
+# seeds .env automatically before the app starts. Reach for this script only
+# when:
 #
-# Why this is needed: docker-compose.yml bind-mounts a single FILE
-# (${APP_DATA_DIR}/data/.env -> /app/.env). Docker creates a DIRECTORY at that
-# path when the source file does not exist, and the container then exits
-# because it cannot read its configuration. This script removes that stray
-# directory, drops a real .env in its place with freshly generated secrets,
-# and fixes the ownership the container needs.
+#   - you need to change the hostname baked into the browser-facing URLs
+#     (HOST_SERVER, WEBSOCKET_URL, CORS_ALLOWED_ORIGINS, REDIRECT_URL),
+#     e.g. you reach your Umbrel by IP instead of umbrel.local
+#   - the config got into a bad state and you want a clean one
+#   - you are recovering an install that predates the init service
+#
+# Run it ON THE UMBREL BOX: ssh umbrel@umbrel.local
 #
 # Safe to re-run: an existing .env file is left untouched unless --force.
+# --force regenerates APP_KEY and API_KEY_PEPPER, which invalidates every
+# stored password hash and encrypted broker token. Back up first.
 #
 # Usage:
 #   ./bootstrap-env.sh                    # host defaults to umbrel.local

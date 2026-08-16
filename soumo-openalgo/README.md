@@ -3,59 +3,99 @@
 Self-hosted algorithmic trading platform for Indian brokers, packaged for
 umbrelOS. Upstream project: <https://github.com/marketcalls/openalgo>
 
-Image: `marketcalls/openalgo:latest` (multi-arch, `linux/amd64` and
-`linux/arm64`) — works on both Umbrel Home and Raspberry Pi.
+Image: `marketcalls/openalgo:2d8edfd` — pinned by commit, multi-arch
+(`linux/amd64` and `linux/arm64`), so it works on both Umbrel Home and
+Raspberry Pi. Upstream publishes no semver tags, only `latest` and short-SHA
+tags; `2d8edfd` is release 2.0.2.0 and is digest-identical to the `latest`
+that was current when this was packaged.
 
 ## Install
 
-1. Install **OpenAlgo** from this community app store. It will start and then
-   fail its health check. That is expected — see step 2.
+1. If you reach your Umbrel at something other than `umbrel.local`, edit
+   `OA_HOSTNAME` in `docker-compose.yml` first. Otherwise skip this.
 
-2. SSH into your Umbrel and run the bootstrap script once:
+2. Install **OpenAlgo** from this community app store. No SSH needed.
 
-   ```bash
-   ssh umbrel@umbrel.local
-   curl -fsSL https://raw.githubusercontent.com/Soumojit28/umbrel-app-store/main/soumo-openalgo/bootstrap-env.sh -o bootstrap-env.sh
-   chmod +x bootstrap-env.sh
-   ./bootstrap-env.sh
-   ```
+3. Open `http://umbrel.local:5000` and create your account.
 
-   Pass a hostname or IP if `umbrel.local` is not how you reach the box:
-
-   ```bash
-   ./bootstrap-env.sh 192.168.1.42
-   ```
-
-3. Add your broker credentials:
+4. Add broker credentials in the OpenAlgo UI, or on disk:
 
    ```bash
    sudo nano ~/umbrel/app-data/soumo-openalgo/data/.env
    ```
 
-   Set `BROKER_API_KEY`, `BROKER_API_SECRET`, and `REDIRECT_URL`.
+   Set `BROKER_API_KEY`, `BROKER_API_SECRET`, and `REDIRECT_URL`, then restart
+   the app from the dashboard.
 
-4. Restart OpenAlgo from the Umbrel dashboard, then open
-   `http://umbrel.local:5000` and create your account.
+First boot takes a few minutes: database migrations run before gunicorn binds,
+which is why the health check allows a 180 second start period.
 
-### Why step 2 exists
+### What the init service does
 
 `docker-compose.yml` bind-mounts a single **file**
 (`${APP_DATA_DIR}/data/.env` to `/app/.env`). When the source file does not
-exist, Docker creates a **directory** at that path instead, and the container
-exits because it cannot read its configuration. umbrelOS has no pre-start hook
-that could seed the file, so the first run is bootstrapped by hand.
+exist, Docker creates a **directory** at that path instead, the container exits
+because it cannot read its configuration, and umbrelOS reports the install as
+failed. umbrelOS has no pre-start hook, so a one-shot `init` service runs to
+completion first (`depends_on: service_completed_successfully`) and guarantees
+the file exists.
 
-The script also fixes three things that are easy to get wrong:
+It runs from the same image, so there is no extra pull, and it reads
+`.sample.env` from inside the image rather than the network. It fixes three
+things that are easy to get wrong:
 
-- **Ownership.** The container runs as `appuser`, pinned to UID/GID 1000. The
-  `.env` mount is read-write because OpenAlgo rotates `FERNET_SALT` in place on
-  first run; a root-owned file makes that fail and gunicorn restart-loops
-  (upstream issues #1394 and #960).
+- **Secrets.** Fresh `APP_KEY` and `API_KEY_PEPPER` from
+  `secrets.token_hex(32)`, instead of the well-known sample values.
 - **Bind addresses.** `FLASK_HOST_IP` and `WEBSOCKET_HOST` default to
-  `127.0.0.1`. Inside a container that means the Docker port mapping and
-  `app_proxy` have nothing to reach. Both are rewritten to `0.0.0.0`.
-- **Secrets.** Fresh `APP_KEY` and `API_KEY_PEPPER` are generated with
-  `secrets.token_hex(32)` instead of shipping the well-known sample values.
+  `127.0.0.1`. Inside a container that means the Docker port map and
+  `app_proxy` have nothing to reach. Both become `0.0.0.0`. `ZMQ_HOST` is
+  deliberately left on loopback.
+- **Ownership.** The app runs as `appuser`, pinned to UID/GID 1000. The `.env`
+  mount is read-write because OpenAlgo rotates `FERNET_SALT` in place; a
+  root-owned file makes that fail and gunicorn restart-loops (upstream issues
+  #1394 and #960).
+
+In-place rewriting of a bind-mounted `.env` is supported upstream —
+`utils/env_check.py:344` detects the bind mount and skips the temp-file plus
+rename pattern, which would otherwise fail with `EXDEV` across filesystems.
+
+## Troubleshooting
+
+Everything below runs on the Umbrel box over `ssh umbrel@umbrel.local`.
+
+**App will not install or immediately shows as stopped**
+
+```bash
+docker ps -a --filter name=soumo-openalgo
+docker logs soumo-openalgo_init_1
+docker logs soumo-openalgo_web_1 --tail 100
+```
+
+`init` should exit 0 and print `[init] done`. If it never ran, your umbrelOS
+is too old for `depends_on.condition`; run `bootstrap-env.sh` manually instead.
+
+**Check the config actually landed**
+
+```bash
+ls -la ~/umbrel/app-data/soumo-openalgo/data/.env
+```
+
+Must be a **file**, owned by `1000:1000`, mode `600`. If it is a directory,
+the init service did not run — delete it and run `bootstrap-env.sh`.
+
+**Store added but no app tile**
+
+```bash
+ls ~/umbrel/app-stores/
+```
+
+Look for a directory derived from this repo URL containing `soumo-openalgo/`.
+If the clone is stale after a push, remove and re-add the store in the UI.
+
+**Port 5000 already taken by another app**
+
+Change `port:` in `umbrel-app.yml`, then update `HOST_SERVER` and
+`CORS_ALLOWED_ORIGINS` in `.env` to match.
 
 ## Ports
 
@@ -120,18 +160,23 @@ capital against live data with exchange-aligned auto square-off.
 
 ## Upgrading
 
-The compose file tracks `marketcalls/openalgo:latest`. To pull a newer build:
+The image is pinned by commit SHA, so nothing moves under you. Upstream
+publishes no semver tags — only `latest` and short-SHA tags — so an upgrade
+means picking a newer SHA deliberately.
 
-```bash
-ssh umbrel@umbrel.local
-docker pull marketcalls/openalgo:latest
-```
+1. Find the current tag:
 
-Then restart the app from the dashboard. Database migrations
-(`upgrade/migrate_all.py`) run automatically on container start.
+   ```bash
+   curl -fsSL "https://hub.docker.com/v2/repositories/marketcalls/openalgo/tags?page_size=5&ordering=last_updated"
+   ```
 
-To make the Umbrel dashboard show an update, bump `version:` in
-`umbrel-app.yml` and push.
+2. Update **both** `image:` lines in `docker-compose.yml` — `init` and `web`
+   must stay on the same tag.
+3. Bump `version:` in `umbrel-app.yml` so the dashboard offers the update.
+4. Commit and push, then update the app from the Umbrel UI.
+
+Database migrations (`upgrade/migrate_all.py`) run automatically on container
+start, so no manual migration step is needed.
 
 ## Backup
 

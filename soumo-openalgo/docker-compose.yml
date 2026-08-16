@@ -8,10 +8,109 @@ services:
       # get bounced before they reach the app.
       PROXY_AUTH_ADD: "false"
 
+  # ---------------------------------------------------------------------
+  # One-shot bootstrap. Runs to completion before `web` starts.
+  #
+  # web bind-mounts a single FILE (data/.env -> /app/.env). Docker creates a
+  # DIRECTORY at the source path when the file does not exist, and the
+  # container then exits because it cannot read its configuration - which
+  # umbrelOS surfaces as a failed install. This service guarantees the file
+  # exists first, with generated secrets and the right ownership.
+  #
+  # Uses the same image, so no extra pull. .sample.env ships inside it
+  # (.dockerignore re-includes it), so this works with no network access.
+  # ---------------------------------------------------------------------
+  init:
+    image: marketcalls/openalgo:2d8edfd
+    user: "0:0"
+    restart: "no"
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+    environment:
+      # Change these two if you reach your Umbrel by IP or a custom
+      # hostname, then restart the app. They only set the browser-facing
+      # URLs baked into .env on FIRST run.
+      OA_HOSTNAME: umbrel.local
+      OA_WEB_PORT: "5000"
+      OA_WS_PORT: "8765"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        echo "[init] preparing persistent directories"
+        mkdir -p /data/db /data/log /data/strategies /data/keys /data/tmp
+        if [ -d /data/.env ]; then
+          echo "[init] removing stray directory Docker created at /data/.env"
+          rm -rf /data/.env
+        fi
+        if [ ! -s /data/.env ]; then
+          echo "[init] seeding /data/.env from the image's .sample.env"
+          /app/.venv/bin/python - <<'PY'
+        import os, pathlib, secrets
+
+        host = os.environ.get("OA_HOSTNAME", "umbrel.local")
+        web = os.environ.get("OA_WEB_PORT", "5000")
+        ws = os.environ.get("OA_WS_PORT", "8765")
+
+        text = pathlib.Path("/app/.sample.env").read_text(encoding="utf-8")
+
+        # Real secrets instead of the well-known sample values.
+        text = text.replace(
+            "OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE",
+            secrets.token_hex(32),
+        )
+        text = text.replace(
+            "OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE",
+            secrets.token_hex(32),
+        )
+
+        # Must bind 0.0.0.0 INSIDE the container. On loopback the Docker port
+        # map and app_proxy have nothing to reach.
+        text = text.replace("FLASK_HOST_IP='127.0.0.1'", "FLASK_HOST_IP='0.0.0.0'")
+        text = text.replace("WEBSOCKET_HOST='127.0.0.1'", "WEBSOCKET_HOST='0.0.0.0'")
+
+        # ZMQ_HOST is deliberately NOT rewritten. The broker adapters and the
+        # WebSocket proxy share this container, so the tick bus stays on
+        # loopback and is never reachable from the LAN.
+
+        replacements = {
+            "HOST_SERVER = 'http://127.0.0.1:5000'":
+                f"HOST_SERVER = 'http://{host}:{web}'",
+            "WEBSOCKET_URL='ws://127.0.0.1:8765'":
+                f"WEBSOCKET_URL='ws://{host}:{ws}'",
+            "CORS_ALLOWED_ORIGINS = 'http://127.0.0.1:5000'":
+                f"CORS_ALLOWED_ORIGINS = 'http://{host}:{web}'",
+            "REDIRECT_URL = 'http://127.0.0.1:5000/<broker>/callback'":
+                f"REDIRECT_URL = 'http://{host}:{web}/<broker>/callback'",
+        }
+        for old, new in replacements.items():
+            if old not in text:
+                raise SystemExit(f"[init] .sample.env no longer contains: {old}")
+            text = text.replace(old, new)
+
+        pathlib.Path("/data/.env").write_text(text, encoding="utf-8")
+        print("[init] wrote /data/.env")
+        PY
+        else
+          echo "[init] /data/.env already present, leaving it alone"
+        fi
+        # The app runs as appuser, pinned to UID/GID 1000. The .env mount is
+        # read-write because OpenAlgo rotates FERNET_SALT in place; a
+        # root-owned file makes that fail and gunicorn restart-loops.
+        # See marketcalls/openalgo#1394 and #960.
+        chown -R 1000:1000 /data
+        chmod 600 /data/.env
+        echo "[init] done"
+
   web:
-    image: marketcalls/openalgo:latest
+    image: marketcalls/openalgo:2d8edfd
     restart: on-failure
     stop_grace_period: 1m
+    init: true
+
+    depends_on:
+      init:
+        condition: service_completed_successfully
 
     # Shared memory for scipy/numba. 25 percent of container RAM.
     # 4GB Pi: 256m | 8GB: 512m | 16GB Umbrel Home: 1g
@@ -19,10 +118,9 @@ services:
 
     # Port 5000 is fronted by app_proxy and must NOT be published here.
     # Port 8765 is the raw market-data WebSocket proxy, used by
-    # /websocket/test and by Python SDK feed clients. app_proxy only
-    # fronts one port, so 8765 is published directly.
-    # ZMQ 5555 is deliberately never published: the broker adapters and the
-    # WebSocket proxy share this container, so the bus stays on loopback.
+    # /websocket/test and by Python SDK feed clients. app_proxy only fronts
+    # one port, so 8765 is published directly.
+    # ZMQ 5555 is never published: see the note in the init service.
     ports:
       - "8765:8765"
 
@@ -30,13 +128,13 @@ services:
       TZ: Asia/Kolkata
       # Thread caps prevent RLIMIT_NPROC exhaustion in containers.
       # See marketcalls/openalgo#822. Raise to 4 on Umbrel Home.
-      OPENBLAS_NUM_THREADS: 2
-      OMP_NUM_THREADS: 2
-      MKL_NUM_THREADS: 2
-      NUMEXPR_NUM_THREADS: 2
-      NUMBA_NUM_THREADS: 2
+      OPENBLAS_NUM_THREADS: "2"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      NUMEXPR_NUM_THREADS: "2"
+      NUMBA_NUM_THREADS: "2"
       # Per-strategy memory ceiling. 4GB Pi: 256 | 8GB+: 512 to 1024
-      STRATEGY_MEMORY_LIMIT_MB: 256
+      STRATEGY_MEMORY_LIMIT_MB: "256"
 
     volumes:
       - ${APP_DATA_DIR}/data/db:/app/db
@@ -44,14 +142,13 @@ services:
       - ${APP_DATA_DIR}/data/strategies:/app/strategies
       - ${APP_DATA_DIR}/data/keys:/app/keys
       - ${APP_DATA_DIR}/data/tmp:/app/tmp
-      # Bind-mounted FILE, not a directory. It must exist on the host before
-      # first start or Docker silently creates a directory here and the
-      # container exits. See this app's README for the bootstrap step.
+      # Single file, guaranteed to exist by the init service above.
       - ${APP_DATA_DIR}/data/.env:/app/.env
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 90s
+      retries: 5
+      # First boot runs database migrations before gunicorn binds.
+      start_period: 180s
