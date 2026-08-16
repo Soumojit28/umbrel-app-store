@@ -1,0 +1,7 @@
+# Shell scripts run on the Umbrel box (Linux) - never let Windows checkouts
+# introduce CRLF, which would break the shebang.
+* text=auto eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.svg text eol=lf
+*.md text eol=lf

@@ -1,0 +1,55 @@
+manifestVersion: 1
+id: soumo-openalgo
+name: OpenAlgo
+tagline: Algorithmic trading platform for Indian brokers
+category: finance
+version: "2.0.2.0"
+port: 5000
+description: >-
+  OpenAlgo is a self-hosted algorithmic trading platform that puts a single
+  unified API in front of 35+ Indian brokers.
+
+
+  One instance gives you several surfaces sharing one broker session and one
+  market-data feed:
+
+
+  - Unified Broker API at /api/v1 for TradingView, Amibroker, ChartInk, Excel,
+    Python and MCP clients
+
+  - Python Strategy Host with an in-browser editor, IST scheduling and live logs
+
+  - Flow, a no-code node graph builder from market data through indicators and
+    conditions to order execution
+
+  - Options and Portfolio Suite with 18 tools including Option Chain, Greeks,
+    OI Tracker, Max Pain, Vol Surface, GEX, Portfolio Backtester and
+    Strategy Builder
+
+  - Charting and Scalping terminals for line-based and keyboard-driven trading
+
+
+  A built-in Sandbox engine lets you paper trade against live data with
+  1 Crore of virtual capital and exchange-aligned auto square-off before
+  risking real money.
+
+
+  Single user per deployment. Your broker credentials and trade data never
+  leave your Umbrel.
+developer: marketcalls
+website: https://openalgo.in
+submitter: Soumojit Ash
+submission: https://github.com/marketcalls/openalgo
+repo: https://github.com/marketcalls/openalgo
+support: https://github.com/marketcalls/openalgo/issues
+gallery: []
+releaseNotes: >-
+  First release in this store, tracking OpenAlgo 2.0.2.0.
+
+
+  Requires a one-time .env bootstrap over SSH after install. See the README in
+  this app directory for the exact commands.
+dependencies: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""

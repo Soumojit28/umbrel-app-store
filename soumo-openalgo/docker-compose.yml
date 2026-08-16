@@ -1,0 +1,57 @@
+services:
+  app_proxy:
+    environment:
+      APP_HOST: soumo-openalgo_web_1
+      APP_PORT: 5000
+      # OpenAlgo has its own login. Umbrel's proxy auth must stay off or
+      # webhook callers (TradingView, ChartInk, Amibroker) hitting /api/v1/
+      # get bounced before they reach the app.
+      PROXY_AUTH_ADD: "false"
+
+  web:
+    image: marketcalls/openalgo:latest
+    restart: on-failure
+    stop_grace_period: 1m
+
+    # Shared memory for scipy/numba. 25 percent of container RAM.
+    # 4GB Pi: 256m | 8GB: 512m | 16GB Umbrel Home: 1g
+    shm_size: 256m
+
+    # Port 5000 is fronted by app_proxy and must NOT be published here.
+    # Port 8765 is the raw market-data WebSocket proxy, used by
+    # /websocket/test and by Python SDK feed clients. app_proxy only
+    # fronts one port, so 8765 is published directly.
+    # ZMQ 5555 is deliberately never published: the broker adapters and the
+    # WebSocket proxy share this container, so the bus stays on loopback.
+    ports:
+      - "8765:8765"
+
+    environment:
+      TZ: Asia/Kolkata
+      # Thread caps prevent RLIMIT_NPROC exhaustion in containers.
+      # See marketcalls/openalgo#822. Raise to 4 on Umbrel Home.
+      OPENBLAS_NUM_THREADS: 2
+      OMP_NUM_THREADS: 2
+      MKL_NUM_THREADS: 2
+      NUMEXPR_NUM_THREADS: 2
+      NUMBA_NUM_THREADS: 2
+      # Per-strategy memory ceiling. 4GB Pi: 256 | 8GB+: 512 to 1024
+      STRATEGY_MEMORY_LIMIT_MB: 256
+
+    volumes:
+      - ${APP_DATA_DIR}/data/db:/app/db
+      - ${APP_DATA_DIR}/data/log:/app/log
+      - ${APP_DATA_DIR}/data/strategies:/app/strategies
+      - ${APP_DATA_DIR}/data/keys:/app/keys
+      - ${APP_DATA_DIR}/data/tmp:/app/tmp
+      # Bind-mounted FILE, not a directory. It must exist on the host before
+      # first start or Docker silently creates a directory here and the
+      # container exits. See this app's README for the bootstrap step.
+      - ${APP_DATA_DIR}/data/.env:/app/.env
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
