@@ -43,16 +43,45 @@ services:
           echo "[init] removing stray directory Docker created at /data/.env"
           rm -rf /data/.env
         fi
-        if [ ! -s /data/.env ]; then
-          echo "[init] seeding /data/.env from the image's .sample.env"
-          /app/.venv/bin/python - <<'PY'
-        import os, pathlib, secrets
+        /app/.venv/bin/python - <<'PY'
+        import codecs, os, pathlib, secrets
+
+        DST = pathlib.Path("/data/.env")
+        SRC = pathlib.Path("/app/.sample.env")
+
+        # python-dotenv reads .env strictly as UTF-8. A single Windows-1252
+        # byte - 0x97, an em dash, is the usual one - aborts load_dotenv(),
+        # which takes down every migration in upgrade/migrate_all.py AND the
+        # app itself. Copying or editing .env from a Windows machine is how
+        # the bad byte gets in. Decode valid UTF-8 as-is and reinterpret only
+        # the offending bytes as cp1252, so nothing else in the file changes.
+        def _cp1252_fallback(exc):
+            return (exc.object[exc.start:exc.end].decode("cp1252", errors="replace"), exc.end)
+
+        codecs.register_error("cp1252_fallback", _cp1252_fallback)
+
+        if DST.is_file() and DST.stat().st_size > 0:
+            raw = DST.read_bytes()
+            try:
+                raw.decode("utf-8")
+                print("[init] /data/.env present and valid UTF-8, leaving it alone")
+            except UnicodeDecodeError as exc:
+                print(f"[init] /data/.env is not valid UTF-8: {exc}")
+                backup = DST.parent / ".env.bak-encoding"
+                backup.write_bytes(raw)
+                DST.write_bytes(
+                    raw.decode("utf-8", errors="cp1252_fallback").encode("utf-8")
+                )
+                print(f"[init] re-encoded to UTF-8, original kept at {backup}")
+            raise SystemExit(0)
+
+        print("[init] seeding /data/.env from the image's .sample.env")
 
         host = os.environ.get("OA_HOSTNAME", "umbrel.local")
         web = os.environ.get("OA_WEB_PORT", "5000")
         ws = os.environ.get("OA_WS_PORT", "8765")
 
-        text = pathlib.Path("/app/.sample.env").read_text(encoding="utf-8")
+        text = SRC.read_text(encoding="utf-8")
 
         # Real secrets instead of the well-known sample values.
         text = text.replace(
@@ -88,12 +117,9 @@ services:
                 raise SystemExit(f"[init] .sample.env no longer contains: {old}")
             text = text.replace(old, new)
 
-        pathlib.Path("/data/.env").write_text(text, encoding="utf-8")
+        DST.write_text(text, encoding="utf-8", newline="\n")
         print("[init] wrote /data/.env")
         PY
-        else
-          echo "[init] /data/.env already present, leaving it alone"
-        fi
         # The app runs as appuser, pinned to UID/GID 1000. The .env mount is
         # read-write because OpenAlgo rotates FERNET_SALT in place; a
         # root-owned file makes that fail and gunicorn restart-loops.
